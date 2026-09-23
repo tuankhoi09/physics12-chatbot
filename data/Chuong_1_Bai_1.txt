@@ -1,0 +1,20 @@
+I. Mô hình động học phân tử về cấu tạo chất
+Mô hình động học phân tử gồm các nội dung cơ bản:
+- Vật chất được cấu tạo bởi một số lượng lớn các hạt có kích thước rất nhỏ gọi là phân tử. Các hạt bao gồm (phân tử, nguyên tử, ion).
+- Các phân tử chuyển động không ngừng (hình 1). Nhiệt độ của vật càng cao thì tốc độ chuyển động của các phân tử cấu tạo nên vật càng lớn.
+- Giữa các phân tử có lực hút và đẩy gọi chung là lực liên kết phân tử.
+II. Cấu trúc của chất rắn, chất lỏng và chất khí
+Vật chất thường tồn tại ở ba trạng thái cơ bản là: thể rắn, thể lỏng và thể khí.
+- Ở thể rắn các phân tử rất gần nhau và chúng được sắp xếp theo một trật tự hình học xác định. Lực tương tác giữa các phân tử rất mạnh, giữ cho chúng không di chuyển tự do mà chỉ có thể dao động quanh vị trí cân bằng xác định. Do đó, chất rắn kết tinh luôn có thể tích và hình dạng riêng xác định.
+- Ở thể lỏng, các phân tử ở xa nhau hơn so với các phân tử trong chất rắn. Lực tương tác giữa các phân tử chất lỏng nhỏ hơn trong chất rắn nên giữ cho các phân tử không bị phân tán ra xa nhau, do đó chất lỏng có thể tích riêng xác định. Tuy nhiên lực tương tác này chưa đủ lớn nên các phân tử ở thể lỏng cũng dao động quanh vị trí cân bằng nhưng các vị trí cân bằng này không cố định mà luôn luôn thay đổi. Do đó, khối chất lỏng rất khó bị nén, nó có thể tích xác định nhưng không có hình dạng riêng mà có hình dạng của phần bình chứa nó.
+- Ở thể khí, các phân tử ở xa nhau hơn so với các phân tử trong chất lỏng. Khoảng cách giữa các phân tử rất lớn so với kích thước của chúng nên lực tương tác giữa các phân tử rất yếu (trừ khi va chạm nhau), nên các phân tử chuyển động hoàn toàn hỗn loạn. Do đó, khối chất khí không có hình dạng và thể tích riêng mà nó có hình dạng và thể tích của bình chứa nó và có thể nén được dễ dàng.
+III. Sự chuyển thể
+1. Sự chuyển thể
+Các chất có thể chuyển từ thể này sang thể khác. Đa số các chất ở thể rắn khi nóng lên có thể chuyển sang thể lỏng, rồi từ thể lỏng sang thể khí. Ngược lại, đa số chất khí khi lạnh đi có thể chuyển sang thể lỏng, rồi từ thể lỏng sang thể rắn. Một số chất có thể chuyển trực tiếp từ thể rắn sang thể khí và ngược lại.
+2. Dùng mô hình động học phân tử giải thích sự chuyển thể
+Quá trình chuyển từ thể rắn sang thể lỏng của các chất gọi là sự nóng chảy.
+Sự hoá hơi là quá trình chuyển từ thể lỏng sang thể khí. Sự hoá hơi thể hiện qua hai hình thức đó là sự bay hơi và sự sôi.
+Sự hoá hơi xảy ra trên bề mặt chất lỏng gọi là sự bay hơi. Sự bay hơi xảy ra ở nhiệt độ bất kì và luôn kèm theo sự ngưng tụ.
+Tốc độ bay hơi của chất lỏng càng nhanh nếu diện tích mặt thoáng càng lớn, tốc độ gió càng lớn, nhiệt độ càng cao, và độ ẩm không khí càng thấp.
+Sự hoá hơi xảy ra ở bên trong và trên bề mặt chất lỏng gọi là sự sôi. Sự sôi xảy ra ở nhiệt độ sôi.
+Nhiệt độ sôi của chất lỏng phụ thuộc áp suất khí trên mặt thoáng và bản chất của chất lỏng. Trong suốt thời gian sôi, nhiệt độ chất lỏng không thay đổi.

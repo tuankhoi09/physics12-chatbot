@@ -1,0 +1,26 @@
+I. Khái niệm nội năng
+
+1. Nội năng của một vật
+
+Vì các phân tử chuyển động không ngừng nên chúng có động năng. Động năng này được gọi là động năng phân tử. Động năng phân tử phụ thuộc vào tốc độ chuyển động của phân tử.
+
+Vì các phân tử tương tác với nhau nên chúng có thế năng. Thế năng này được gọi là thế năng tương tác phân tử, gọi tắt là thế năng phân tử. Thế năng phân tử phụ thuộc vào khoảng cách giữa các phân tử. Tổng động năng và thế năng của các phân tử cấu tạo nên vật được gọi là nội năng của vật. Nội năng được kí hiệu bằng chữ U và có đơn vị là jun (J).
+
+Nội năng của một vật phụ thuộc vào nhiệt độ và thể tích của vật.
+
+II. Định luật I của nhiệt động lực học
+
+1. Cách làm thay đổi nội năng
+
+Có hai cách làm thay đổi nội năng của vật là thực hiện công và truyền nhiệt. Trong quá trình thực hiện công có sự chuyển hóa từ một dạng năng lượng khác sang nội năng. Trong quá trình truyền nhiệt không có sự chuyển hóa năng lượng từ dạng này sang dạng khác mà chỉ có sự truyền nội năng từ vật này sang vật khác.
+2. Định luật I của nhiệt động lực học
+
+Độ biến thiên nội năng của vật bằng tổng công và nhiệt lượng mà vật nhận được
+
+Qui ước dấu:
+
+• ΔU> 0: Nội năng tăng; 
+ΔU< 0: Nội năng giảm.
+• A > 0: Hệ nhận công; A < 0: Hệ sinh công.
+
+• Q > 0: Hệ nhận nhiệt; Q < 0: Hệ truyền nhiệt.
