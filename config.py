@@ -17,7 +17,7 @@ MODEL_NAME = "gemini-3.1-flash-lite"
 
 # --- Giới hạn độ dài câu trả lời cho từng chế độ (càng ít token càng nhanh) ---
 MAX_OUTPUT_TOKENS_QNA = 400      # Hỏi đáp: cần ngắn gọn
-MAX_OUTPUT_TOKENS_TUTOR = 500    # Gia sư: mỗi lượt nói vừa phải (theo persona, ~80-150 từ)
+MAX_OUTPUT_TOKENS_TUTOR = 220    # Gia sư: mỗi lượt nói dưới 100 từ
 MAX_OUTPUT_TOKENS_SOLVE = 1400   # Giải đề từ ảnh: cần đủ chỗ trình bày từng bước
 
 # --- Model dùng để tạo EMBEDDING (phục vụ tìm kiếm tài liệu - RAG) ---
@@ -35,6 +35,10 @@ CHUNKS_FILE = os.path.join(VECTORSTORE_DIR, "chunks.json")
 CHAT_HISTORY_FILE = os.path.join(VECTORSTORE_DIR, "chat_history.json")
 TUTOR_HISTORY_FILE = os.path.join(VECTORSTORE_DIR, "tutor_history.json")
 TUTOR_STATE_FILE = os.path.join(VECTORSTORE_DIR, "tutor_state.json")
+
+# --- File lưu DANH SÁCH các cuộc trò chuyện cũ đã lưu lại (giống ChatGPT/Gemini) ---
+QNA_SESSIONS_FILE = os.path.join(VECTORSTORE_DIR, "qna_sessions.json")
+SOLVE_SESSIONS_FILE = os.path.join(VECTORSTORE_DIR, "solve_sessions.json")
 
 # --- Tham số chia nhỏ văn bản (chunking) ---
 CHUNK_SIZE = 900       # số ký tự mỗi đoạn
@@ -64,6 +68,9 @@ Nhiệm vụ của bạn:
 - Nếu tài liệu tham khảo KHÔNG chứa thông tin liên quan, hãy trả lời bằng kiến thức Vật lý
   chung của bạn, và nói rõ là câu trả lời không dựa trên tài liệu được cung cấp.
 - Trình bày công thức rõ ràng (có thể dùng LaTeX dạng $...$ hoặc $$...$$).
+- IN ĐẬM (dạng **như thế này**) những thông tin QUAN TRỌNG NHẤT: tên khái niệm/định luật, công thức
+  cốt lõi, đơn vị, kết quả cuối cùng. Chỉ in đậm vài cụm then chốt (khoảng 2-5 chỗ mỗi câu trả lời),
+  không in đậm cả câu hay cả đoạn.
 - Luôn trả lời bằng tiếng Việt, giọng văn gần gũi như một anh/chị gia sư.
 """
 
@@ -114,9 +121,14 @@ Không đưa toàn bộ lý thuyết của bài vào một lần. Hãy tự chia
 luật Faraday, Phần 4 - Định luật Lenz, Phần 5 - Ứng dụng). Mỗi phần tuân theo đúng chu trình:
   Giảng (ngắn gọn, dễ hiểu) -> Ví dụ minh hoạ -> Câu hỏi kiểm tra -> [DỪNG LẠI chờ học sinh trả lời]
   -> Phân tích câu trả lời -> Phản hồi -> Kiểm tra mức độ hiểu -> Quyết định:
-    - Nếu học sinh đã hiểu tốt -> chuyển sang phần tiếp theo.
-    - Nếu học sinh còn hổng kiến thức -> giảng lại phần đó theo cách khác, đơn giản hơn hoặc dùng ví dụ khác,
-      trước khi chuyển tiếp.
+    - Nếu học sinh đã hiểu tốt -> chuyển sang phần tiếp theo NGAY.
+    - Nếu học sinh còn hổng kiến thức -> giảng lại NGẮN GỌN theo cách khác trước khi chuyển tiếp.
+
+GIỚI HẠN BẮT BUỘC: mỗi phần kiến thức chỉ được hỏi-đáp qua lại TỐI ĐA 2-3 LƯỢT với học sinh (2-3 câu hỏi
+kiểm tra cho phần đó, không hơn). Sau tối đa 3 lượt, dù học sinh đã hiểu trọn vẹn hay chưa, BẮT BUỘC phải
+chuyển sang phần tiếp theo (có thể nhắc ngắn 1 câu về điểm cần ôn thêm), tuyệt đối không lặp lại hỏi thêm
+để "chắc chắn" học sinh hiểu 100% - buổi học cần đi nhanh, không sa đà vào 1 phần.
+
 Luôn cho học sinh biết đang ở phần mấy trên tổng số (ví dụ: "Phần 2/5: Từ thông") để em theo dõi được tiến độ.
 
 --- TỔNG KẾT ---
@@ -125,10 +137,16 @@ gạch đầu dòng ngắn gọn, nhắc lại những điểm học sinh còn y
 
 --- QUY TẮC CHUNG ---
 - Luôn trả lời bằng tiếng Việt, giọng văn ấm áp, kiên nhẫn, khích lệ - như một giáo viên giỏi đang ngồi cạnh học sinh.
-- Câu trả lời mỗi lượt không quá dài (khoảng 80-150 từ), vì đây là hội thoại qua lại, không phải bài giảng viết sẵn.
-- Nếu có phần "TÀI LIỆU THAM KHẢO" được cung cấp, hãy ưu tiên dùng thuật ngữ, công thức, thứ tự trình bày đúng
-  theo tài liệu đó khi giảng, để bám sát chương trình học của học sinh.
+- GIỚI HẠN CỨNG: mỗi lượt nói TUYỆT ĐỐI KHÔNG QUÁ 100 TỪ, dù đang giảng, hỏi, hay phản hồi. Đây là hội thoại
+  qua lại nhanh, không phải bài giảng viết sẵn. Nếu nội dung dài hơn 100 từ, hãy cắt bớt, chỉ giữ ý quan trọng
+  nhất, phần còn lại để dành cho lượt sau.
+- Nếu có phần "TÀI LIỆU THAM KHẢO" được cung cấp ở lượt này, BẮT BUỘC bám sát tuyệt đối vào đó: dùng đúng
+  thuật ngữ, công thức, số liệu, thứ tự trình bày như trong tài liệu, không tự thêm kiến thức ngoài tài liệu
+  trừ khi tài liệu không đề cập đến đúng nội dung đang cần.
 - Dùng LaTeX ($...$ hoặc $$...$$) khi viết công thức.
+- IN ĐẬM (dạng **như thế này**) những thông tin QUAN TRỌNG NHẤT: tên khái niệm/định luật, công thức
+  cốt lõi, đơn vị, kết quả cuối cùng. Chỉ in đậm vài cụm then chốt (khoảng 2-5 chỗ mỗi câu trả lời),
+  không in đậm cả câu hay cả đoạn.
 """
 
 
@@ -145,6 +163,7 @@ Quy trình bắt buộc:
 5. Nếu ảnh không phải đề Vật lý, hoặc không đọc được nội dung, hãy nói rõ thay vì bịa ra một đề bài khác.
 
 Trả lời bằng tiếng Việt, trình bày rõ ràng, có thể dùng gạch đầu dòng hoặc đánh số bước.
+In đậm các thông tin quan trọng: công thức áp dụng, kết quả từng bước chính và đáp số cuối cùng.
 """
 
 
@@ -163,6 +182,23 @@ dạng CHÍNH XÁC như sau, đủ 5 phần tử trong mảng:
     "explanation": "giải thích ngắn gọn (1-2 câu) vì sao đáp án đó đúng"
   }}
 ]
+
+=== NỘI DUNG BUỔI HỌC ===
+{history}
+"""
+
+
+# --- Prompt yêu cầu tóm tắt buổi học thành outline cho Mindmap ---
+MINDMAP_PROMPT_TEMPLATE = """Dựa trên nội dung buổi học vừa rồi về chủ đề "{topic}" (xem bên dưới), hãy tóm tắt
+lại thành 1 SƠ ĐỒ TƯ DUY (mindmap) dạng outline markdown phân cấp.
+
+QUY TẮC BẮT BUỘC:
+- CHỈ trả lời bằng markdown outline, không thêm chữ giải thích nào khác, không dùng code fence (không có ```).
+- Dòng đầu tiên là tiêu đề chính, dạng: # {topic}
+- Các nhánh chính (phần/khái niệm lớn đã học) dùng ##
+- Các ý con dùng gạch đầu dòng (-), có thể lồng nhau tối đa 2-3 cấp bằng cách thụt lề thêm 2 dấu cách mỗi cấp.
+- Ngắn gọn, mỗi dòng chỉ 1 ý/1 cụm từ, KHÔNG viết thành câu dài.
+- Ưu tiên đưa vào các công thức, định nghĩa, định luật quan trọng đã giảng trong buổi học.
 
 === NỘI DUNG BUỔI HỌC ===
 {history}

@@ -3,3 +3,10 @@ __pycache__/
 *.pyc
 .env
 .streamlit/secrets.toml
+
+# Lịch sử trò chuyện cá nhân - không đưa lên GitHub
+vectorstore/chat_history.json
+vectorstore/tutor_history.json
+vectorstore/tutor_state.json
+vectorstore/qna_sessions.json
+vectorstore/solve_sessions.json

@@ -12,6 +12,8 @@ Chạy bằng lệnh:
 import os
 import json
 import re
+import datetime
+import uuid
 import streamlit as st
 from google import genai
 from google.genai import types
@@ -20,6 +22,8 @@ from dotenv import load_dotenv
 import config
 import rag_utils
 import tts
+import mindmap
+import youtube_utils
 
 load_dotenv()  # đọc file .env để lấy GEMINI_API_KEY
 
@@ -59,6 +63,16 @@ def _stream_text(response_stream):
     for chunk in response_stream:
         if chunk.text:
             yield chunk.text
+
+
+@st.cache_resource
+def get_youtube_key():
+    api_key = None
+    try:
+        api_key = st.secrets.get("YOUTUBE_API_KEY")
+    except Exception:
+        pass
+    return api_key or os.environ.get("YOUTUBE_API_KEY")
 
 
 # ---------- SIDEBAR: QUẢN LÝ TÀI LIỆU (dùng chung cho cả 2 chế độ) ----------
@@ -110,12 +124,6 @@ with st.sidebar:
         kind, message = st.session_state["process_result"]
         (st.success if kind == "success" else st.warning)(message)
 
-    st.divider()
-    if st.button("🗑️ Xoá lịch sử chat (Hỏi đáp)"):
-        st.session_state.messages = []
-        rag_utils.clear_chat_history(config.CHAT_HISTORY_FILE)
-        st.rerun()
-
     if st.session_state.get("messages"):
         chat_text = "\n\n".join(
             f"{'Bạn' if m['role'] == 'user' else 'Mình (Chatbot nhóm 1)'}: {m['content']}"
@@ -129,6 +137,30 @@ with st.sidebar:
         )
 
 
+def _make_session_title(messages: list) -> str:
+    """Tạo tiêu đề ngắn cho 1 cuộc trò chuyện, lấy từ câu hỏi đầu tiên của học sinh."""
+    for m in messages:
+        if m["role"] == "user":
+            text = m["content"].strip().replace("\n", " ")
+            return (text[:45] + "…") if len(text) > 45 else text
+    return "Cuộc trò chuyện"
+
+
+def _archive_qna_session():
+    """Lưu cuộc trò chuyện Hỏi đáp hiện tại vào danh sách lịch sử, rồi dọn sạch để bắt đầu cuộc mới."""
+    if st.session_state.get("messages"):
+        sessions = rag_utils.load_chat_history(config.QNA_SESSIONS_FILE)
+        sessions.insert(0, {
+            "id": str(uuid.uuid4()),
+            "title": _make_session_title(st.session_state.messages),
+            "created_at": datetime.datetime.now().strftime("%d/%m %H:%M"),
+            "messages": st.session_state.messages,
+        })
+        rag_utils.save_chat_history(sessions, config.QNA_SESSIONS_FILE)
+    st.session_state.messages = []
+    rag_utils.clear_chat_history(config.CHAT_HISTORY_FILE)
+
+
 # ---------- CHẾ ĐỘ 1: HỎI ĐÁP ----------
 
 def render_qna_mode():
@@ -138,9 +170,41 @@ def render_qna_mode():
     if "messages" not in st.session_state:
         st.session_state.messages = rag_utils.load_chat_history(config.CHAT_HISTORY_FILE)
 
+    col_new, col_hist = st.columns([1.3, 3])
+    with col_new:
+        if st.button("➕ Cuộc trò chuyện mới", key="qna_new_chat"):
+            _archive_qna_session()
+            st.rerun()
+
+    qna_sessions = rag_utils.load_chat_history(config.QNA_SESSIONS_FILE)
+    with col_hist:
+        with st.expander(f"🕘 Lịch sử trò chuyện ({len(qna_sessions)})"):
+            if not qna_sessions:
+                st.caption("Chưa có cuộc trò chuyện nào được lưu.")
+            for s in qna_sessions:
+                c1, c2, c3 = st.columns([4, 1, 0.6])
+                with c1:
+                    st.caption(f"{s['created_at']} — {s['title']}")
+                with c2:
+                    if st.button("Mở lại", key=f"qna_open_{s['id']}"):
+                        _archive_qna_session()
+                        st.session_state.messages = s["messages"]
+                        rag_utils.save_chat_history(st.session_state.messages, config.CHAT_HISTORY_FILE)
+                        st.rerun()
+                with c3:
+                    if st.button("🗑️", key=f"qna_del_{s['id']}", help="Xoá cuộc trò chuyện này"):
+                        remaining = [x for x in qna_sessions if x["id"] != s["id"]]
+                        rag_utils.save_chat_history(remaining, config.QNA_SESSIONS_FILE)
+                        st.rerun()
+
     for msg in st.session_state.messages:
         with st.chat_message("user" if msg["role"] == "user" else "assistant"):
             st.markdown(msg["content"])
+            if msg.get("sources"):
+                with st.expander("📎 Nguồn tài liệu đã tham khảo"):
+                    for s in msg["sources"]:
+                        st.caption(f"{s['source']} — trang {s['page']}")
+                        st.text(s["text"][:300] + ("..." if len(s["text"]) > 300 else ""))
 
     question = st.chat_input("Nhập câu hỏi Vật lý của bạn...", key="qna_input")
 
@@ -198,8 +262,11 @@ def render_qna_mode():
                         st.text(s["text"][:300] + ("..." if len(s["text"]) > 300 else ""))
 
         if answer:
-            st.session_state.messages.append({"role": "model", "content": answer})
+            st.session_state.messages.append(
+                {"role": "model", "content": answer, "sources": sources or []}
+            )
             rag_utils.save_chat_history(st.session_state.messages, config.CHAT_HISTORY_FILE)
+            st.rerun()
 
 
 # ---------- CHẾ ĐỘ 2: GIA SƯ AI ----------
@@ -211,10 +278,24 @@ def _tutor_turn(user_text: str):
     with st.chat_message("user"):
         st.markdown(user_text)
 
+    # Tìm lại đoạn tài liệu liên quan tới lượt NÀY (không chỉ lúc mở đầu bài), để bám sát tài liệu xuyên suốt.
+    # Nếu học sinh đã chọn đúng 1 file cho bài này, CHỈ tìm trong file đó - tránh lẫn nội dung bài khác.
+    augmented_text = user_text
+    embeddings, chunks = rag_utils.load_vectorstore()
+    if embeddings is not None and len(chunks) > 0:
+        allowed = [st.session_state.tutor_source] if st.session_state.get("tutor_source") else None
+        results = rag_utils.retrieve(client, user_text, embeddings, chunks, allowed_sources=allowed)
+        context_text = ""
+        for chunk, score in results:
+            context_text += f"\n---\n(Nguồn: {chunk['source']}, trang {chunk['page']})\n{chunk['text']}\n"
+        if context_text:
+            augmented_text = f"TÀI LIỆU THAM KHẢO:{context_text}\n\n{user_text}"
+
     history = [
         types.Content(role=("user" if m["role"] == "user" else "model"), parts=[types.Part(text=m["content"])])
-        for m in st.session_state.tutor_messages
+        for m in st.session_state.tutor_messages[:-1]
     ]
+    history.append(types.Content(role="user", parts=[types.Part(text=augmented_text)]))
 
     with st.chat_message("assistant"):
         answer = None
@@ -241,6 +322,7 @@ def _tutor_turn(user_text: str):
     if answer:
         st.session_state.tutor_messages.append({"role": "model", "content": answer})
         rag_utils.save_chat_history(st.session_state.tutor_messages, config.TUTOR_HISTORY_FILE)
+        st.rerun()
 
 
 def _generate_quiz(client, topic: str):
@@ -302,6 +384,54 @@ def _render_quiz():
             st.rerun()
 
 
+def _generate_mindmap_md(client, topic: str) -> str:
+    """Yêu cầu Gemini tóm tắt buổi học thành 1 outline markdown để vẽ mindmap."""
+    history_text = "\n".join(
+        f"{'Học sinh' if m['role'] == 'user' else 'Gia sư'}: {m['content']}"
+        for m in st.session_state.tutor_messages
+    )
+    prompt = config.MINDMAP_PROMPT_TEMPLATE.format(topic=topic, history=history_text[:8000])
+
+    response = rag_utils.call_with_retry(
+        client.models.generate_content,
+        model=config.MODEL_NAME,
+        contents=[types.Content(role="user", parts=[types.Part(text=prompt)])],
+        config=types.GenerateContentConfig(temperature=0.3, max_output_tokens=700),
+    )
+    md = response.text.strip()
+    if md.startswith("```"):
+        md = md.strip("`")
+        if md.lower().startswith("markdown"):
+            md = md[len("markdown"):]
+    return md.strip()
+
+
+def _filter_relevant_videos(client, topic: str, candidates: list) -> list:
+    """Nhờ Gemini chọn lọc lại, chỉ giữ tối đa 2 video THỰC SỰ liên quan đến bài học (có thể 0 hoặc 1)."""
+    if not candidates:
+        return []
+
+    listing = "\n".join(f"{i}. {v['title']} (kênh: {v['channel']})" for i, v in enumerate(candidates))
+    prompt = (
+        f'Bài học đang dạy: "{topic}".\n\n'
+        f"Danh sách video tìm được trên YouTube:\n{listing}\n\n"
+        "Trong số này, chọn TỐI ĐA 2 video mà tên video cho thấy THỰC SỰ minh hoạ trực tiếp đúng hiện "
+        "tượng/kiến thức của bài học trên - bỏ qua video không liên quan, chung chung, hoặc không chắc chắn. "
+        "Nếu không video nào thực sự phù hợp, trả về mảng rỗng. CHỈ trả lời bằng JSON dạng mảng chỉ số "
+        "(index, bắt đầu từ 0), ví dụ [0, 2] hoặc [1] hoặc []. Không thêm chữ nào khác."
+    )
+    response = rag_utils.call_with_retry(
+        client.models.generate_content,
+        model=config.MODEL_NAME,
+        contents=[types.Content(role="user", parts=[types.Part(text=prompt)])],
+        config=types.GenerateContentConfig(temperature=0.1, max_output_tokens=60),
+    )
+    raw = response.text.strip()
+    match = re.search(r"\[.*?\]", raw, re.DOTALL)
+    indices = json.loads(match.group(0)) if match else []
+    return [candidates[i] for i in indices if isinstance(i, int) and 0 <= i < len(candidates)]
+
+
 def render_tutor_mode():
     st.subheader("🎓 Gia sư AI - học 1 kèm 1")
     st.caption(
@@ -312,26 +442,42 @@ def render_tutor_mode():
     if "tutor_messages" not in st.session_state:
         st.session_state.tutor_messages = rag_utils.load_chat_history(config.TUTOR_HISTORY_FILE)
     if "tutor_topic" not in st.session_state:
-        st.session_state.tutor_topic = rag_utils.load_tutor_state().get("topic")
+        tutor_state = rag_utils.load_tutor_state()
+        st.session_state.tutor_topic = tutor_state.get("topic")
+        st.session_state.tutor_source = tutor_state.get("source")  # tên file, hoặc None = không giới hạn
 
-    # ----- CHƯA CHỌN BÀI: cho học sinh chọn chủ đề để bắt đầu -----
+    # ----- CHƯA CHỌN BÀI: cho học sinh chọn chủ đề + file tài liệu để bắt đầu -----
     if not st.session_state.tutor_topic:
         topic = st.text_input(
             "Bạn muốn học bài nào hôm nay?",
             placeholder="Ví dụ: Cảm ứng điện từ, Dao động điều hoà, Sóng ánh sáng...",
         )
+
+        embeddings, chunks = rag_utils.load_vectorstore()
+        available_sources = sorted({c["source"] for c in chunks}) if chunks else []
+        selected_source = None
+        if available_sources:
+            NO_LIMIT = "— Không giới hạn, dùng tất cả tài liệu đã tải —"
+            picked = st.selectbox(
+                "Bài này nằm trong file tài liệu nào? (chọn đúng file để Gia sư không lấy nhầm nội dung bài khác)",
+                [NO_LIMIT] + available_sources,
+            )
+            selected_source = None if picked == NO_LIMIT else picked
+
         if st.button("🚀 Bắt đầu buổi học", type="primary") and topic.strip():
             with st.spinner("Gia sư đang chuẩn bị bài học..."):
-                embeddings, chunks = rag_utils.load_vectorstore()
+                allowed = [selected_source] if selected_source else None
                 context_text = ""
                 if embeddings is not None and len(chunks) > 0:
-                    results = rag_utils.retrieve(client, topic, embeddings, chunks)
+                    results = rag_utils.retrieve(client, topic, embeddings, chunks, allowed_sources=allowed)
                     for chunk, score in results:
                         context_text += f"\n---\n(Nguồn: {chunk['source']}, trang {chunk['page']})\n{chunk['text']}\n"
 
                 kickoff = f'Học sinh muốn học bài: "{topic}".'
                 if context_text:
                     kickoff += f"\n\nTÀI LIỆU THAM KHẢO:{context_text}"
+                elif selected_source:
+                    kickoff += f"\n\n(Không tìm thấy nội dung liên quan trong file \"{selected_source}\".)"
                 kickoff += (
                     "\n\nHãy bắt đầu buổi học đúng quy trình: BƯỚC 1 - tạo tình huống mở đầu gây tò mò "
                     "liên quan trực tiếp đến bài này, rồi DỪNG LẠI chờ học sinh trả lời. Không giảng lý "
@@ -346,11 +492,13 @@ def render_tutor_mode():
                         config=types.GenerateContentConfig(
                             system_instruction=config.TUTOR_SYSTEM_INSTRUCTION,
                             temperature=0.6,
+                            max_output_tokens=config.MAX_OUTPUT_TOKENS_TUTOR,
                         ),
                     )
                     st.session_state.tutor_topic = topic.strip()
+                    st.session_state.tutor_source = selected_source
                     st.session_state.tutor_messages = [{"role": "model", "content": response.text}]
-                    rag_utils.save_tutor_state({"topic": st.session_state.tutor_topic})
+                    rag_utils.save_tutor_state({"topic": st.session_state.tutor_topic, "source": selected_source})
                     rag_utils.save_chat_history(st.session_state.tutor_messages, config.TUTOR_HISTORY_FILE)
                     st.rerun()
                 except Exception as e:
@@ -360,12 +508,14 @@ def render_tutor_mode():
     # ----- ĐANG TRONG BUỔI HỌC -----
     col1, col2 = st.columns([5, 1.3])
     with col1:
-        st.info(f"📖 Đang học: **{st.session_state.tutor_topic}**")
+        source_note = f" (tài liệu: {st.session_state.tutor_source})" if st.session_state.get("tutor_source") else ""
+        st.info(f"📖 Đang học: **{st.session_state.tutor_topic}**{source_note}")
     with col2:
         if st.button("🔁 Đổi bài học"):
             st.session_state.tutor_topic = None
+            st.session_state.tutor_source = None
             st.session_state.tutor_messages = []
-            rag_utils.save_tutor_state({"topic": None})
+            rag_utils.save_tutor_state({"topic": None, "source": None})
             rag_utils.clear_chat_history(config.TUTOR_HISTORY_FILE)
             st.rerun()
 
@@ -380,7 +530,7 @@ def render_tutor_mode():
         _tutor_turn(student_reply)
 
     st.divider()
-    col_summary, col_quiz = st.columns(2)
+    col_summary, col_quiz, col_mindmap, col_video = st.columns(4)
     with col_summary:
         if st.button("📋 Tổng kết buổi học"):
             _tutor_turn(
@@ -396,10 +546,76 @@ def render_tutor_mode():
                     st.rerun()
                 except Exception as e:
                     st.error(f"Không soạn được trắc nghiệm, thử lại nhé.\n\n(Chi tiết: {e})")
+    with col_mindmap:
+        if st.button("🧠 Tạo Mindmap buổi học"):
+            with st.spinner("Gia sư đang vẽ sơ đồ tư duy..."):
+                try:
+                    st.session_state.tutor_mindmap_md = _generate_mindmap_md(client, st.session_state.tutor_topic)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Không tạo được mindmap, thử lại nhé.\n\n(Chi tiết: {e})")
+    with col_video:
+        if st.button("🎬 Tìm video minh hoạ"):
+            st.session_state.show_video_search = True
+            st.rerun()
 
     if st.session_state.get("tutor_quiz"):
         st.divider()
         _render_quiz()
+
+    if st.session_state.get("tutor_mindmap_md"):
+        st.divider()
+        st.markdown("### 🧠 Mindmap buổi học")
+        st.caption("Kéo để di chuyển, cuộn chuột để phóng to/thu nhỏ, bấm vào 1 nhánh để thu gọn/mở rộng.")
+        mindmap.render_mindmap(st.session_state.tutor_mindmap_md)
+        st.download_button(
+            "💾 Tải outline mindmap (.md)",
+            data=st.session_state.tutor_mindmap_md,
+            file_name=f"mindmap_{st.session_state.tutor_topic}.md",
+            mime="text/markdown",
+        )
+        if st.button("🔄 Tạo mindmap khác"):
+            st.session_state.tutor_mindmap_md = None
+            st.rerun()
+
+    if st.session_state.get("show_video_search"):
+        st.divider()
+        st.markdown("### 🎬 Video minh hoạ (YouTube, dưới 3 phút)")
+        youtube_key = get_youtube_key()
+        if not youtube_key:
+            st.warning(
+                "Chưa cấu hình YOUTUBE_API_KEY. Xem hướng dẫn tạo key trong README.md, rồi thêm vào "
+                "file `.env` (máy local) hoặc Secrets (Streamlit Cloud) với tên `YOUTUBE_API_KEY`."
+            )
+        else:
+            search_query = st.text_input(
+                "Tìm video về hiện tượng nào?",
+                value=st.session_state.tutor_topic,
+                key="video_search_query",
+            )
+            if st.button("🔍 Tìm video", key="video_search_button"):
+                with st.spinner("Đang tìm và chọn lọc video phù hợp..."):
+                    try:
+                        candidates = youtube_utils.search_short_videos(
+                            youtube_key, search_query + " vật lý thí nghiệm minh hoạ", max_results=8
+                        )
+                        st.session_state.tutor_videos = _filter_relevant_videos(
+                            client, search_query, candidates
+                        )
+                    except Exception as e:
+                        st.error(f"Không tìm được video, thử lại nhé.\n\n(Chi tiết: {e})")
+
+            videos = st.session_state.get("tutor_videos")
+            if videos:
+                for v in videos:
+                    vcol1, vcol2 = st.columns([1, 3])
+                    with vcol1:
+                        st.image(v["thumbnail"])
+                    with vcol2:
+                        st.markdown(f"**[{v['title']}]({v['url']})**")
+                        st.caption(f"{v['channel']} • {youtube_utils.format_duration(v['duration_seconds'])}")
+            elif videos is not None:
+                st.info("Không tìm thấy video nào thực sự phù hợp với đúng nội dung bài học, thử đổi từ khoá khác xem sao.")
 
 
 # ---------- CHẾ ĐỘ 3: QUÉT & GIẢI ĐỀ TỪ ẢNH ----------
@@ -409,6 +625,22 @@ def render_solve_mode():
     st.caption(
         "Chụp hoặc chọn ảnh đề bài Vật lý (viết tay hoặc in), tải lên, Gemini sẽ đọc và giải chi tiết."
     )
+
+    solve_sessions = rag_utils.load_chat_history(config.SOLVE_SESSIONS_FILE)
+    with st.expander(f"🕘 Lịch sử đã giải ({len(solve_sessions)})"):
+        if not solve_sessions:
+            st.caption("Chưa giải đề nào được lưu.")
+        for s in solve_sessions:
+            hc1, hc2 = st.columns([5, 0.6])
+            with hc1:
+                st.markdown(f"**{s['created_at']} — {s['title']}**")
+            with hc2:
+                if st.button("🗑️", key=f"solve_del_{s['id']}", help="Xoá mục này"):
+                    remaining = [x for x in solve_sessions if x["id"] != s["id"]]
+                    rag_utils.save_chat_history(remaining, config.SOLVE_SESSIONS_FILE)
+                    st.rerun()
+            st.markdown(s["answer"])
+            st.divider()
 
     image_file = st.file_uploader(
         "Tải ảnh đề bài",
@@ -458,7 +690,16 @@ def render_solve_mode():
                         max_output_tokens=config.MAX_OUTPUT_TOKENS_SOLVE,
                     ),
                 )
-                st.write_stream(_stream_text(response_stream))
+                answer_text = st.write_stream(_stream_text(response_stream))
+
+                solve_sessions = rag_utils.load_chat_history(config.SOLVE_SESSIONS_FILE)
+                solve_sessions.insert(0, {
+                    "id": str(uuid.uuid4()),
+                    "title": extra_note.strip() if extra_note.strip() else "Đề bài không ghi chú",
+                    "created_at": datetime.datetime.now().strftime("%d/%m %H:%M"),
+                    "answer": answer_text,
+                })
+                rag_utils.save_chat_history(solve_sessions, config.SOLVE_SESSIONS_FILE)
             except Exception as e:
                 st.error(
                     "Không đọc/giải được ảnh này, có thể do Gemini đang quá tải hoặc ảnh quá mờ. "

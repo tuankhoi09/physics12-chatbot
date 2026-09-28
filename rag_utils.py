@@ -200,15 +200,30 @@ def save_tutor_state(state: dict) -> None:
 
 # ---------- 5. TÌM KIẾM ĐOẠN LIÊN QUAN (COSINE SIMILARITY) ----------
 
-def retrieve(client, query: str, embeddings: np.ndarray, chunks: list, top_k: int = None):
-    """Trả về top_k chunk có nội dung liên quan nhất tới câu hỏi."""
+def retrieve(client, query: str, embeddings: np.ndarray, chunks: list, top_k: int = None,
+             allowed_sources: list = None):
+    """
+    Trả về top_k chunk có nội dung liên quan nhất tới câu hỏi.
+    Nếu allowed_sources được truyền vào (danh sách tên file), CHỈ tìm trong các chunk
+    thuộc đúng những file đó - dùng để giới hạn Gia sư AI trong đúng phạm vi 1 bài học.
+    """
     top_k = top_k or config.TOP_K
+
+    if allowed_sources:
+        keep_idx = [i for i, c in enumerate(chunks) if c["source"] in allowed_sources]
+        if not keep_idx:
+            return []
+        search_embeddings = embeddings[keep_idx]
+        search_chunks = [chunks[i] for i in keep_idx]
+    else:
+        search_embeddings = embeddings
+        search_chunks = chunks
+
     query_vec = np.array(embed_text(client, query, task_type="RETRIEVAL_QUERY"), dtype=np.float32)
 
-    # cosine similarity giữa query và toàn bộ embeddings đã lưu
-    norms = np.linalg.norm(embeddings, axis=1) * np.linalg.norm(query_vec)
+    norms = np.linalg.norm(search_embeddings, axis=1) * np.linalg.norm(query_vec)
     norms[norms == 0] = 1e-10
-    scores = embeddings @ query_vec / norms
+    scores = search_embeddings @ query_vec / norms
 
     top_indices = np.argsort(scores)[::-1][:top_k]
-    return [(chunks[i], float(scores[i])) for i in top_indices]
+    return [(search_chunks[i], float(scores[i])) for i in top_indices]
