@@ -122,6 +122,11 @@ def build_vectorstore(client, progress_callback=None) -> int:
                 all_chunks.append({"text": chunk, "source": filename, "page": page_num})
 
     if not all_chunks:
+        # Không còn file nào -> xoá sạch chỉ mục cũ, tránh dữ liệu cũ (đã xoá file) còn sót lại
+        if os.path.exists(config.EMBEDDINGS_FILE):
+            os.remove(config.EMBEDDINGS_FILE)
+        if os.path.exists(config.CHUNKS_FILE):
+            os.remove(config.CHUNKS_FILE)
         return 0
 
     embeddings = []
@@ -180,21 +185,23 @@ def clear_chat_history(path: str = None) -> None:
         os.remove(path)
 
 
-def load_tutor_state() -> dict:
-    """Đọc chủ đề bài học hiện tại của Gia sư AI (nếu đang có buổi học dang dở)."""
-    if not os.path.exists(config.TUTOR_STATE_FILE):
-        return {"topic": None}
+def load_tutor_state(path: str = None) -> dict:
+    """Đọc 1 trạng thái nhỏ dạng dict đã lưu (mặc định: chủ đề bài học hiện tại của Gia sư AI)."""
+    path = path or config.TUTOR_STATE_FILE
+    if not os.path.exists(path):
+        return {}
     try:
-        with open(config.TUTOR_STATE_FILE, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except (json.JSONDecodeError, OSError):
-        return {"topic": None}
+        return {}
 
 
-def save_tutor_state(state: dict) -> None:
-    """Lưu chủ đề bài học hiện tại, để tắt/mở lại app vẫn tiếp tục đúng bài."""
+def save_tutor_state(state: dict, path: str = None) -> None:
+    """Lưu 1 trạng thái nhỏ dạng dict, để tắt/mở lại app vẫn giữ đúng."""
+    path = path or config.TUTOR_STATE_FILE
     os.makedirs(config.VECTORSTORE_DIR, exist_ok=True)
-    with open(config.TUTOR_STATE_FILE, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
 
 

@@ -62,7 +62,10 @@ def _stream_text(response_stream):
     """Chuyển luồng streaming từ Gemini thành từng đoạn text, để st.write_stream hiện dần."""
     for chunk in response_stream:
         if chunk.text:
-            yield chunk.text
+            # Markdown chỉ xuống dòng đúng khi có 2 dấu cách trước dấu xuống dòng - nếu không,
+            # nhiều dòng liền nhau sẽ bị dính thành 1 dòng dài. Gemini chỉ trả về "\n" đơn thuần
+            # nên phải tự thêm 2 dấu cách vào đây.
+            yield chunk.text.replace("\n", "  \n")
 
 
 @st.cache_resource
@@ -124,6 +127,51 @@ with st.sidebar:
         kind, message = st.session_state["process_result"]
         (st.success if kind == "success" else st.warning)(message)
 
+    existing_files = []
+    if os.path.isdir(config.DATA_DIR):
+        existing_files = sorted(
+            f for f in os.listdir(config.DATA_DIR) if f.lower().endswith((".pdf", ".txt"))
+        )
+
+    if existing_files:
+        with st.expander(f"📁 Quản lý file đã tải ({len(existing_files)})"):
+            st.caption("Đổi tên hoặc xoá bớt file không cần - xong sẽ tự xử lý lại tài liệu.")
+            for fname in existing_files:
+                new_name = st.text_input(
+                    fname, value=fname, key=f"rename_input_{fname}", label_visibility="collapsed"
+                )
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button("✏️ Đổi tên", key=f"rename_btn_{fname}", use_container_width=True):
+                        if not new_name.strip() or new_name == fname:
+                            st.warning("Chưa đổi tên gì cả.")
+                        elif os.path.exists(os.path.join(config.DATA_DIR, new_name)):
+                            st.error(f"Đã có file tên \"{new_name}\" rồi, chọn tên khác.")
+                        else:
+                            os.rename(
+                                os.path.join(config.DATA_DIR, fname),
+                                os.path.join(config.DATA_DIR, new_name),
+                            )
+                            with st.spinner("Đang cập nhật lại chỉ mục tài liệu..."):
+                                rag_utils.build_vectorstore(client)
+                            st.session_state["process_result"] = (
+                                "success",
+                                f'Đã đổi tên "{fname}" thành "{new_name}" và cập nhật lại tài liệu.',
+                            )
+                            st.rerun()
+                with c2:
+                    if st.button("🗑️ Xoá file", key=f"delete_btn_{fname}", use_container_width=True):
+                        os.remove(os.path.join(config.DATA_DIR, fname))
+                        with st.spinner("Đang cập nhật lại chỉ mục tài liệu..."):
+                            n = rag_utils.build_vectorstore(client)
+                        st.session_state["process_result"] = (
+                            "success" if n > 0 else "warning",
+                            f'Đã xoá "{fname}" và cập nhật lại tài liệu.'
+                            if n > 0 else f'Đã xoá "{fname}". Không còn tài liệu nào được lập chỉ mục.',
+                        )
+                        st.rerun()
+                st.divider()
+
     if st.session_state.get("messages"):
         chat_text = "\n\n".join(
             f"{'Bạn' if m['role'] == 'user' else 'Mình (Chatbot nhóm 1)'}: {m['content']}"
@@ -146,19 +194,44 @@ def _make_session_title(messages: list) -> str:
     return "Cuộc trò chuyện"
 
 
-def _archive_qna_session():
-    """Lưu cuộc trò chuyện Hỏi đáp hiện tại vào danh sách lịch sử, rồi dọn sạch để bắt đầu cuộc mới."""
-    if st.session_state.get("messages"):
-        sessions = rag_utils.load_chat_history(config.QNA_SESSIONS_FILE)
+def _sync_current_qna_session():
+    """
+    Đồng bộ cuộc trò chuyện ĐANG MỞ vào danh sách lịch sử - CẬP NHẬT đúng 1 bản ghi
+    (theo qna_active_id) thay vì thêm bản mới mỗi lần, để không bị nhân bản khi
+    chuyển qua lại giữa các cuộc.
+    """
+    if not st.session_state.get("messages"):
+        return
+    sessions = rag_utils.load_chat_history(config.QNA_SESSIONS_FILE)
+    active_id = st.session_state.get("qna_active_id")
+
+    if active_id:
+        for s in sessions:
+            if s["id"] == active_id:
+                s["messages"] = st.session_state.messages
+                s["title"] = _make_session_title(st.session_state.messages)
+                break
+        else:
+            # id đang mở không còn trong danh sách (ví dụ vừa bị xoá) -> thêm lại
+            sessions.insert(0, {
+                "id": active_id,
+                "title": _make_session_title(st.session_state.messages),
+                "created_at": datetime.datetime.now().strftime("%d/%m %H:%M"),
+                "messages": st.session_state.messages,
+            })
+    else:
+        # Cuộc hoàn toàn mới, chưa có id -> tạo id và thêm đúng 1 lần
+        new_id = str(uuid.uuid4())
+        st.session_state.qna_active_id = new_id
+        rag_utils.save_tutor_state({"id": new_id}, config.QNA_ACTIVE_ID_FILE)
         sessions.insert(0, {
-            "id": str(uuid.uuid4()),
+            "id": new_id,
             "title": _make_session_title(st.session_state.messages),
             "created_at": datetime.datetime.now().strftime("%d/%m %H:%M"),
             "messages": st.session_state.messages,
         })
-        rag_utils.save_chat_history(sessions, config.QNA_SESSIONS_FILE)
-    st.session_state.messages = []
-    rag_utils.clear_chat_history(config.CHAT_HISTORY_FILE)
+
+    rag_utils.save_chat_history(sessions, config.QNA_SESSIONS_FILE)
 
 
 # ---------- CHẾ ĐỘ 1: HỎI ĐÁP ----------
@@ -169,11 +242,16 @@ def render_qna_mode():
 
     if "messages" not in st.session_state:
         st.session_state.messages = rag_utils.load_chat_history(config.CHAT_HISTORY_FILE)
+    if "qna_active_id" not in st.session_state:
+        st.session_state.qna_active_id = rag_utils.load_tutor_state(config.QNA_ACTIVE_ID_FILE).get("id")
 
     col_new, col_hist = st.columns([1.3, 3])
     with col_new:
         if st.button("➕ Cuộc trò chuyện mới", key="qna_new_chat"):
-            _archive_qna_session()
+            st.session_state.messages = []
+            st.session_state.qna_active_id = None
+            rag_utils.clear_chat_history(config.CHAT_HISTORY_FILE)
+            rag_utils.save_tutor_state({"id": None}, config.QNA_ACTIVE_ID_FILE)
             st.rerun()
 
     qna_sessions = rag_utils.load_chat_history(config.QNA_SESSIONS_FILE)
@@ -181,21 +259,29 @@ def render_qna_mode():
         with st.expander(f"🕘 Lịch sử trò chuyện ({len(qna_sessions)})"):
             if not qna_sessions:
                 st.caption("Chưa có cuộc trò chuyện nào được lưu.")
-            for s in qna_sessions:
-                c1, c2, c3 = st.columns([4, 1, 0.6])
-                with c1:
-                    st.caption(f"{s['created_at']} — {s['title']}")
-                with c2:
-                    if st.button("Mở lại", key=f"qna_open_{s['id']}"):
-                        _archive_qna_session()
-                        st.session_state.messages = s["messages"]
-                        rag_utils.save_chat_history(st.session_state.messages, config.CHAT_HISTORY_FILE)
-                        st.rerun()
-                with c3:
-                    if st.button("🗑️", key=f"qna_del_{s['id']}", help="Xoá cuộc trò chuyện này"):
-                        remaining = [x for x in qna_sessions if x["id"] != s["id"]]
-                        rag_utils.save_chat_history(remaining, config.QNA_SESSIONS_FILE)
-                        st.rerun()
+            else:
+                with st.container(height=300):  # khung cố định, tự cuộn khi danh sách dài
+                    for s in qna_sessions:
+                        c1, c2, c3 = st.columns([4, 1, 0.6])
+                        with c1:
+                            st.caption(f"{s['created_at']} — {s['title']}")
+                        with c2:
+                            if st.button("Mở lại", key=f"qna_open_{s['id']}"):
+                                st.session_state.messages = s["messages"]
+                                st.session_state.qna_active_id = s["id"]
+                                rag_utils.save_chat_history(st.session_state.messages, config.CHAT_HISTORY_FILE)
+                                rag_utils.save_tutor_state({"id": s["id"]}, config.QNA_ACTIVE_ID_FILE)
+                                st.rerun()
+                        with c3:
+                            if st.button("🗑️", key=f"qna_del_{s['id']}", help="Xoá cuộc trò chuyện này"):
+                                remaining = [x for x in qna_sessions if x["id"] != s["id"]]
+                                rag_utils.save_chat_history(remaining, config.QNA_SESSIONS_FILE)
+                                if st.session_state.get("qna_active_id") == s["id"]:
+                                    st.session_state.messages = []
+                                    st.session_state.qna_active_id = None
+                                    rag_utils.clear_chat_history(config.CHAT_HISTORY_FILE)
+                                    rag_utils.save_tutor_state({"id": None}, config.QNA_ACTIVE_ID_FILE)
+                                st.rerun()
 
     for msg in st.session_state.messages:
         with st.chat_message("user" if msg["role"] == "user" else "assistant"):
@@ -211,6 +297,7 @@ def render_qna_mode():
     if question:
         st.session_state.messages.append({"role": "user", "content": question})
         rag_utils.save_chat_history(st.session_state.messages, config.CHAT_HISTORY_FILE)
+        _sync_current_qna_session()
         with st.chat_message("user"):
             st.markdown(question)
 
@@ -266,6 +353,7 @@ def render_qna_mode():
                 {"role": "model", "content": answer, "sources": sources or []}
             )
             rag_utils.save_chat_history(st.session_state.messages, config.CHAT_HISTORY_FILE)
+            _sync_current_qna_session()
             st.rerun()
 
 
@@ -446,42 +534,47 @@ def render_tutor_mode():
         st.session_state.tutor_topic = tutor_state.get("topic")
         st.session_state.tutor_source = tutor_state.get("source")  # tên file, hoặc None = không giới hạn
 
-    # ----- CHƯA CHỌN BÀI: cho học sinh chọn chủ đề + file tài liệu để bắt đầu -----
+    # ----- CHƯA CHỌN BÀI: chỉ cần chọn 1 file tài liệu, Gia sư tự đọc và dạy theo đúng nội dung đó -----
     if not st.session_state.tutor_topic:
-        topic = st.text_input(
-            "Bạn muốn học bài nào hôm nay?",
-            placeholder="Ví dụ: Cảm ứng điện từ, Dao động điều hoà, Sóng ánh sáng...",
-        )
-
         embeddings, chunks = rag_utils.load_vectorstore()
         available_sources = sorted({c["source"] for c in chunks}) if chunks else []
-        selected_source = None
-        if available_sources:
-            NO_LIMIT = "— Không giới hạn, dùng tất cả tài liệu đã tải —"
-            picked = st.selectbox(
-                "Bài này nằm trong file tài liệu nào? (chọn đúng file để Gia sư không lấy nhầm nội dung bài khác)",
-                [NO_LIMIT] + available_sources,
+
+        if not available_sources:
+            st.warning(
+                "Chưa có tài liệu nào được xử lý. Vào tab 💬 Hỏi đáp, tải file bài học lên và bấm "
+                '"Xử lý tài liệu" trước, rồi quay lại đây chọn bài.'
             )
-            selected_source = None if picked == NO_LIMIT else picked
+            return
 
-        if st.button("🚀 Bắt đầu buổi học", type="primary") and topic.strip():
-            with st.spinner("Gia sư đang chuẩn bị bài học..."):
-                allowed = [selected_source] if selected_source else None
-                context_text = ""
-                if embeddings is not None and len(chunks) > 0:
-                    results = rag_utils.retrieve(client, topic, embeddings, chunks, allowed_sources=allowed)
-                    for chunk, score in results:
-                        context_text += f"\n---\n(Nguồn: {chunk['source']}, trang {chunk['page']})\n{chunk['text']}\n"
+        selected_source = st.selectbox(
+            "Chọn file tài liệu muốn học (Gia sư sẽ dạy đúng theo nội dung trong file này)",
+            available_sources,
+        )
 
-                kickoff = f'Học sinh muốn học bài: "{topic}".'
-                if context_text:
-                    kickoff += f"\n\nTÀI LIỆU THAM KHẢO:{context_text}"
-                elif selected_source:
-                    kickoff += f"\n\n(Không tìm thấy nội dung liên quan trong file \"{selected_source}\".)"
-                kickoff += (
-                    "\n\nHãy bắt đầu buổi học đúng quy trình: BƯỚC 1 - tạo tình huống mở đầu gây tò mò "
-                    "liên quan trực tiếp đến bài này, rồi DỪNG LẠI chờ học sinh trả lời. Không giảng lý "
-                    "thuyết ngay, không tự hỏi rồi tự trả lời thay học sinh."
+        if st.button("🚀 Bắt đầu buổi học", type="primary"):
+            with st.spinner("Gia sư đang đọc tài liệu và chuẩn bị bài học..."):
+                # Lấy TOÀN BỘ nội dung của đúng file đã chọn (không tìm theo từ khoá), sắp theo trang
+                source_chunks = sorted(
+                    (c for c in chunks if c["source"] == selected_source),
+                    key=lambda c: c.get("page", 0),
+                )
+                full_text = "\n---\n".join(c["text"] for c in source_chunks)
+
+                max_chars = 15000  # phòng khi lỡ chọn nhầm 1 file rất lớn, tránh prompt quá dài
+                truncated_note = ""
+                if len(full_text) > max_chars:
+                    full_text = full_text[:max_chars]
+                    truncated_note = "\n\n(Tài liệu khá dài, chỉ lấy phần đầu để giảng dạy.)"
+
+                topic = os.path.splitext(selected_source)[0]
+
+                kickoff = (
+                    f'Học sinh muốn được dạy TOÀN BỘ nội dung trong tài liệu "{selected_source}".\n\n'
+                    f"TOÀN BỘ NỘI DUNG TÀI LIỆU:\n{full_text}{truncated_note}\n\n"
+                    "Hãy tự xác định đây là bài học gì, chia thành các phần kiến thức nhỏ dựa ĐÚNG theo "
+                    "nội dung trên, rồi bắt đầu buổi học đúng quy trình: BƯỚC 1 - tạo tình huống mở đầu "
+                    "gây tò mò liên quan trực tiếp đến nội dung này, rồi DỪNG LẠI chờ học sinh trả lời. "
+                    "Không giảng lý thuyết ngay, không tự hỏi rồi tự trả lời thay học sinh."
                 )
 
                 try:
@@ -495,7 +588,7 @@ def render_tutor_mode():
                             max_output_tokens=config.MAX_OUTPUT_TOKENS_TUTOR,
                         ),
                     )
-                    st.session_state.tutor_topic = topic.strip()
+                    st.session_state.tutor_topic = topic
                     st.session_state.tutor_source = selected_source
                     st.session_state.tutor_messages = [{"role": "model", "content": response.text}]
                     rag_utils.save_tutor_state({"topic": st.session_state.tutor_topic, "source": selected_source})
@@ -626,26 +719,32 @@ def render_solve_mode():
         "Chụp hoặc chọn ảnh đề bài Vật lý (viết tay hoặc in), tải lên, Gemini sẽ đọc và giải chi tiết."
     )
 
+    if "solve_uploader_key" not in st.session_state:
+        st.session_state.solve_uploader_key = 0
+
+    if st.button("➕ Giải bài mới", key="solve_new"):
+        st.session_state.solve_uploader_key += 1  # đổi key -> uploader tự làm mới, ảnh/ghi chú cũ mất đi
+        st.rerun()
+
     solve_sessions = rag_utils.load_chat_history(config.SOLVE_SESSIONS_FILE)
-    with st.expander(f"🕘 Lịch sử đã giải ({len(solve_sessions)})"):
-        if not solve_sessions:
-            st.caption("Chưa giải đề nào được lưu.")
-        for s in solve_sessions:
-            hc1, hc2 = st.columns([5, 0.6])
-            with hc1:
-                st.markdown(f"**{s['created_at']} — {s['title']}**")
-            with hc2:
-                if st.button("🗑️", key=f"solve_del_{s['id']}", help="Xoá mục này"):
-                    remaining = [x for x in solve_sessions if x["id"] != s["id"]]
-                    rag_utils.save_chat_history(remaining, config.SOLVE_SESSIONS_FILE)
-                    st.rerun()
-            st.markdown(s["answer"])
-            st.divider()
+    st.markdown(f"#### 🕘 Lịch sử đã giải ({len(solve_sessions)})")
+    if not solve_sessions:
+        st.caption("Chưa giải đề nào được lưu.")
+    else:
+        with st.container(height=150):  # khung cố định, tự cuộn khi danh sách dài - không phình trang
+            for s in solve_sessions:
+                with st.expander(f"{s['created_at']} — {s['title']}"):
+                    if st.button("🗑️ Xoá mục này", key=f"solve_del_{s['id']}"):
+                        remaining = [x for x in solve_sessions if x["id"] != s["id"]]
+                        rag_utils.save_chat_history(remaining, config.SOLVE_SESSIONS_FILE)
+                        st.rerun()
+                    st.markdown(s["answer"])
+    st.divider()
 
     image_file = st.file_uploader(
         "Tải ảnh đề bài",
         type=["png", "jpg", "jpeg", "webp"],
-        key="solve_image_uploader",
+        key=f"solve_image_uploader_{st.session_state.solve_uploader_key}",
     )
 
     if image_file:
@@ -654,7 +753,7 @@ def render_solve_mode():
         extra_note = st.text_input(
             "Ghi chú thêm cho Gia sư (không bắt buộc)",
             placeholder="Ví dụ: chỉ cần đáp số, hoặc giải câu b thôi...",
-            key="solve_extra_note",
+            key=f"solve_extra_note_{st.session_state.solve_uploader_key}",
         )
 
         if st.button("🔍 Giải bài này", type="primary"):

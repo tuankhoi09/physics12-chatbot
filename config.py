@@ -39,6 +39,7 @@ TUTOR_STATE_FILE = os.path.join(VECTORSTORE_DIR, "tutor_state.json")
 # --- File lưu DANH SÁCH các cuộc trò chuyện cũ đã lưu lại (giống ChatGPT/Gemini) ---
 QNA_SESSIONS_FILE = os.path.join(VECTORSTORE_DIR, "qna_sessions.json")
 SOLVE_SESSIONS_FILE = os.path.join(VECTORSTORE_DIR, "solve_sessions.json")
+QNA_ACTIVE_ID_FILE = os.path.join(VECTORSTORE_DIR, "qna_active_id.json")
 
 # --- Tham số chia nhỏ văn bản (chunking) ---
 CHUNK_SIZE = 900       # số ký tự mỗi đoạn

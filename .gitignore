@@ -10,3 +10,4 @@ vectorstore/tutor_history.json
 vectorstore/tutor_state.json
 vectorstore/qna_sessions.json
 vectorstore/solve_sessions.json
+vectorstore/qna_active_id.json
