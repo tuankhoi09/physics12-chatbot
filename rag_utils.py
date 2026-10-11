@@ -100,16 +100,20 @@ def embed_text(client, text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> list
     return result.embeddings[0].values
 
 
-def build_vectorstore(client, progress_callback=None) -> int:
+def build_vectorstore(client, data_dir: str, embeddings_file: str, chunks_file: str,
+                       progress_callback=None) -> int:
     """
-    Đọc toàn bộ file trong DATA_DIR, chia chunk, tạo embedding,
-    rồi lưu xuống VECTORSTORE_DIR. Trả về số chunk đã tạo.
+    Đọc toàn bộ file trong data_dir, chia chunk, tạo embedding, rồi lưu xuống
+    embeddings_file/chunks_file. Trả về số chunk đã tạo.
+    Dùng config.data_dir(username) / config.embeddings_file(username) /
+    config.chunks_file(username) để mỗi học sinh có 1 bộ chỉ mục riêng.
     """
-    os.makedirs(config.VECTORSTORE_DIR, exist_ok=True)
+    os.makedirs(data_dir, exist_ok=True)
+    os.makedirs(os.path.dirname(embeddings_file), exist_ok=True)
 
     all_chunks = []  # mỗi phần tử: {"text": ..., "source": ..., "page": ...}
-    for filename in sorted(os.listdir(config.DATA_DIR)):
-        path = os.path.join(config.DATA_DIR, filename)
+    for filename in sorted(os.listdir(data_dir)):
+        path = os.path.join(data_dir, filename)
         if filename.lower().endswith(".pdf"):
             pages = read_pdf(path)
         elif filename.lower().endswith(".txt"):
@@ -123,10 +127,10 @@ def build_vectorstore(client, progress_callback=None) -> int:
 
     if not all_chunks:
         # Không còn file nào -> xoá sạch chỉ mục cũ, tránh dữ liệu cũ (đã xoá file) còn sót lại
-        if os.path.exists(config.EMBEDDINGS_FILE):
-            os.remove(config.EMBEDDINGS_FILE)
-        if os.path.exists(config.CHUNKS_FILE):
-            os.remove(config.CHUNKS_FILE)
+        if os.path.exists(embeddings_file):
+            os.remove(embeddings_file)
+        if os.path.exists(chunks_file):
+            os.remove(chunks_file)
         return 0
 
     embeddings = []
@@ -137,8 +141,8 @@ def build_vectorstore(client, progress_callback=None) -> int:
             progress_callback(i + 1, len(all_chunks))
         time.sleep(0.3)  # tránh gọi API quá nhanh, vượt giới hạn free tier
 
-    np.save(config.EMBEDDINGS_FILE, np.array(embeddings, dtype=np.float32))
-    with open(config.CHUNKS_FILE, "w", encoding="utf-8") as f:
+    np.save(embeddings_file, np.array(embeddings, dtype=np.float32))
+    with open(chunks_file, "w", encoding="utf-8") as f:
         json.dump(all_chunks, f, ensure_ascii=False, indent=2)
 
     return len(all_chunks)
@@ -146,21 +150,42 @@ def build_vectorstore(client, progress_callback=None) -> int:
 
 # ---------- 4. TẢI VECTOR STORE ----------
 
-def load_vectorstore():
+def load_vectorstore(embeddings_file: str, chunks_file: str):
     """Trả về (embeddings: np.ndarray | None, chunks: list | None)."""
-    if not (os.path.exists(config.EMBEDDINGS_FILE) and os.path.exists(config.CHUNKS_FILE)):
+    if not (os.path.exists(embeddings_file) and os.path.exists(chunks_file)):
         return None, None
-    embeddings = np.load(config.EMBEDDINGS_FILE)
-    with open(config.CHUNKS_FILE, "r", encoding="utf-8") as f:
+    embeddings = np.load(embeddings_file)
+    with open(chunks_file, "r", encoding="utf-8") as f:
         chunks = json.load(f)
     return embeddings, chunks
 
 
+# ---------- 4a. ĐỌC/GHI JSON DÙNG CHUNG (lớp học, bài tập, bài nộp...) ----------
+
+def load_json(path: str, default=None):
+    """Đọc 1 file JSON bất kỳ, trả về `default` (mặc định None) nếu chưa có file
+    hoặc file hỏng. Dùng cho dữ liệu chung của trường (lớp/bài tập/bài nộp)."""
+    if not os.path.exists(path):
+        return default
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return default
+
+
+def save_json(data, path: str) -> None:
+    """Ghi 1 object bất kỳ (list/dict) ra file JSON, tự tạo thư mục nếu cần."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
 # ---------- 4b. LƯU / TẢI LỊCH SỬ TRÒ CHUYỆN ----------
 
-def load_chat_history(path: str = None) -> list:
-    """Đọc lịch sử chat đã lưu từ lần trước (nếu có). Trả về [] nếu chưa có gì."""
-    path = path or config.CHAT_HISTORY_FILE
+def load_chat_history(path: str) -> list:
+    """Đọc lịch sử chat đã lưu từ lần trước (nếu có). Trả về [] nếu chưa có gì.
+    path PHẢI là file riêng của đúng username đang đăng nhập (xem config.*_file(username))."""
     if not os.path.exists(path):
         return []
     try:
@@ -170,24 +195,21 @@ def load_chat_history(path: str = None) -> list:
         return []
 
 
-def save_chat_history(messages: list, path: str = None) -> None:
+def save_chat_history(messages: list, path: str) -> None:
     """Lưu toàn bộ lịch sử chat hiện tại xuống file, để mở lại app vẫn còn."""
-    path = path or config.CHAT_HISTORY_FILE
-    os.makedirs(config.VECTORSTORE_DIR, exist_ok=True)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(messages, f, ensure_ascii=False, indent=2)
 
 
-def clear_chat_history(path: str = None) -> None:
+def clear_chat_history(path: str) -> None:
     """Xoá file lịch sử chat đã lưu."""
-    path = path or config.CHAT_HISTORY_FILE
     if os.path.exists(path):
         os.remove(path)
 
 
-def load_tutor_state(path: str = None) -> dict:
-    """Đọc 1 trạng thái nhỏ dạng dict đã lưu (mặc định: chủ đề bài học hiện tại của Gia sư AI)."""
-    path = path or config.TUTOR_STATE_FILE
+def load_tutor_state(path: str) -> dict:
+    """Đọc 1 trạng thái nhỏ dạng dict đã lưu (chủ đề bài học hiện tại của Gia sư AI, ...)."""
     if not os.path.exists(path):
         return {}
     try:
@@ -197,10 +219,9 @@ def load_tutor_state(path: str = None) -> dict:
         return {}
 
 
-def save_tutor_state(state: dict, path: str = None) -> None:
+def save_tutor_state(state: dict, path: str) -> None:
     """Lưu 1 trạng thái nhỏ dạng dict, để tắt/mở lại app vẫn giữ đúng."""
-    path = path or config.TUTOR_STATE_FILE
-    os.makedirs(config.VECTORSTORE_DIR, exist_ok=True)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
 

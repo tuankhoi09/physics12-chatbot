@@ -23,23 +23,87 @@ MAX_OUTPUT_TOKENS_SOLVE = 1400   # Giải đề từ ảnh: cần đủ chỗ tr
 # --- Model dùng để tạo EMBEDDING (phục vụ tìm kiếm tài liệu - RAG) ---
 EMBED_MODEL = "gemini-embedding-001"
 
-# --- Thư mục chứa tài liệu gốc (PDF / TXT) ---
-DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+# --- Đăng nhập (xem auth_config.yaml) ---
+AUTH_CONFIG_FILE = os.path.join(os.path.dirname(__file__), "auth_config.yaml")
 
-# --- Thư mục lưu vector đã xử lý ---
-VECTORSTORE_DIR = os.path.join(os.path.dirname(__file__), "vectorstore")
-EMBEDDINGS_FILE = os.path.join(VECTORSTORE_DIR, "embeddings.npy")
-CHUNKS_FILE = os.path.join(VECTORSTORE_DIR, "chunks.json")
+# --- Mỗi học sinh đăng nhập có 1 thư mục dữ liệu RIÊNG, tách biệt hoàn toàn với
+# học sinh khác: tài liệu đã tải lên, chỉ mục RAG, lịch sử chat đều nằm trong đây. ---
+USER_DATA_ROOT = os.path.join(os.path.dirname(__file__), "user_data")
 
-# --- File lưu lại lịch sử trò chuyện, để tắt/mở lại app vẫn còn ---
-CHAT_HISTORY_FILE = os.path.join(VECTORSTORE_DIR, "chat_history.json")
-TUTOR_HISTORY_FILE = os.path.join(VECTORSTORE_DIR, "tutor_history.json")
-TUTOR_STATE_FILE = os.path.join(VECTORSTORE_DIR, "tutor_state.json")
 
-# --- File lưu DANH SÁCH các cuộc trò chuyện cũ đã lưu lại (giống ChatGPT/Gemini) ---
-QNA_SESSIONS_FILE = os.path.join(VECTORSTORE_DIR, "qna_sessions.json")
-SOLVE_SESSIONS_FILE = os.path.join(VECTORSTORE_DIR, "solve_sessions.json")
-QNA_ACTIVE_ID_FILE = os.path.join(VECTORSTORE_DIR, "qna_active_id.json")
+def _ensure(path: str) -> str:
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def user_dir(username: str) -> str:
+    """Thư mục gốc riêng của 1 username, tự tạo nếu chưa có."""
+    # Phòng khi username có ký tự lạ -> không dùng trực tiếp làm tên thư mục
+    safe = "".join(c for c in username if c.isalnum() or c in ("_", "-")) or "user"
+    return _ensure(os.path.join(USER_DATA_ROOT, safe))
+
+
+def data_dir(username: str) -> str:
+    """Thư mục chứa tài liệu gốc (PDF/TXT) của riêng username này."""
+    return _ensure(os.path.join(user_dir(username), "data"))
+
+
+def vectorstore_dir(username: str) -> str:
+    """Thư mục lưu vector/lịch sử đã xử lý của riêng username này."""
+    return _ensure(os.path.join(user_dir(username), "vectorstore"))
+
+
+def embeddings_file(username: str) -> str:
+    return os.path.join(vectorstore_dir(username), "embeddings.npy")
+
+
+def chunks_file(username: str) -> str:
+    return os.path.join(vectorstore_dir(username), "chunks.json")
+
+
+def chat_history_file(username: str) -> str:
+    return os.path.join(vectorstore_dir(username), "chat_history.json")
+
+
+def tutor_history_file(username: str) -> str:
+    return os.path.join(vectorstore_dir(username), "tutor_history.json")
+
+
+def tutor_state_file(username: str) -> str:
+    return os.path.join(vectorstore_dir(username), "tutor_state.json")
+
+
+def qna_sessions_file(username: str) -> str:
+    return os.path.join(vectorstore_dir(username), "qna_sessions.json")
+
+
+def solve_sessions_file(username: str) -> str:
+    return os.path.join(vectorstore_dir(username), "solve_sessions.json")
+
+
+def qna_active_id_file(username: str) -> str:
+    return os.path.join(vectorstore_dir(username), "qna_active_id.json")
+
+
+def quiz_history_file(username: str) -> str:
+    """Lịch sử điểm trắc nghiệm của 1 học sinh - cả tự ôn (Gia sư AI) lẫn bài
+    được giao, dùng để học sinh và giáo viên theo dõi tiến độ theo thời gian."""
+    return os.path.join(vectorstore_dir(username), "quiz_history.json")
+
+
+# --- Dữ liệu CHUNG của cả "trường" (lớp học, bài tập được giao, bài nộp) -
+# KHÔNG thuộc riêng 1 tài khoản nào, nên để ở thư mục riêng ngoài user_data/. ---
+SCHOOL_DATA_DIR = os.path.join(os.path.dirname(__file__), "school_data")
+CLASSES_FILE = os.path.join(SCHOOL_DATA_DIR, "classes.json")
+ASSIGNMENTS_FILE = os.path.join(SCHOOL_DATA_DIR, "assignments.json")
+SUBMISSIONS_DIR = os.path.join(SCHOOL_DATA_DIR, "submissions")
+
+
+def submissions_file(assignment_id: str) -> str:
+    """1 file cho mỗi bài tập, chứa bài nộp của TẤT CẢ học sinh trong lớp đó -
+    để giáo viên xem điểm cả lớp 1 chỗ mà không phải mở từng file học sinh."""
+    return os.path.join(_ensure(SUBMISSIONS_DIR), f"{assignment_id}.json")
+
 
 # --- Tham số chia nhỏ văn bản (chunking) ---
 CHUNK_SIZE = 900       # số ký tự mỗi đoạn
@@ -51,8 +115,8 @@ TOP_K = 3
 
 # --- Persona / vai trò của chatbot ---
 SYSTEM_INSTRUCTION = """Bạn là một trợ giảng Vật lý lớp 12 (chương trình Việt Nam), thân thiện và kiên nhẫn.
-Cách xưng hô bắt buộc: tự xưng là "Mình (Chatbot nhóm 1)" và gọi người hỏi là "Bạn" trong suốt cuộc trò chuyện
-(ví dụ: "Mình (Chatbot nhóm 1) giải thích cho Bạn nhé:", "Câu hỏi này Bạn hỏi rất hay!"). Không dùng "tôi", "em", "mình ơi"
+Cách xưng hô bắt buộc: tự xưng là "Mình (Chatbot nhóm 2)" và gọi người hỏi là "Bạn" trong suốt cuộc trò chuyện
+(ví dụ: "Mình (Chatbot nhóm 2) giải thích cho Bạn nhé:", "Câu hỏi này Bạn hỏi rất hay!"). Không dùng "tôi", "em", "mình ơi"
 hay các cách xưng hô khác.
 
 Nhiệm vụ của bạn:
@@ -64,14 +128,19 @@ Nhiệm vụ của bạn:
   khi học sinh yêu cầu giải chi tiết từng bước một bài tập cụ thể (lúc đó ưu tiên đủ bước, đúng,
   vẫn tránh lặp ý không cần thiết).
 - Nếu phần "TÀI LIỆU THAM KHẢO" bên dưới có nội dung liên quan đến câu hỏi, hãy ưu tiên
-  dùng nội dung đó để trả lời cho chính xác theo đúng chương trình học, và có thể nhắc
-  học sinh nội dung này nằm trong tài liệu nào nếu biết.
+  dùng nội dung đó để trả lời cho chính xác theo đúng chương trình học. Khi nhắc đến
+  nguồn, CHỈ nói chung chung "theo tài liệu bạn đã gửi" - TUYỆT ĐỐI không nêu tên file/tên
+  tài liệu cụ thể.
 - Nếu tài liệu tham khảo KHÔNG chứa thông tin liên quan, hãy trả lời bằng kiến thức Vật lý
   chung của bạn, và nói rõ là câu trả lời không dựa trên tài liệu được cung cấp.
 - Trình bày công thức rõ ràng (có thể dùng LaTeX dạng $...$ hoặc $$...$$).
 - IN ĐẬM (dạng **như thế này**) những thông tin QUAN TRỌNG NHẤT: tên khái niệm/định luật, công thức
   cốt lõi, đơn vị, kết quả cuối cùng. Chỉ in đậm vài cụm then chốt (khoảng 2-5 chỗ mỗi câu trả lời),
   không in đậm cả câu hay cả đoạn.
+- DÙNG ICON/EMOJI phù hợp để câu trả lời sinh động, trực quan hơn: ví dụ 📌 trước ý chính/định nghĩa,
+  💡 trước mẹo ghi nhớ hoặc lưu ý quan trọng, 🧮 hoặc ✏️ trước phần tính toán/công thức, ✅ trước kết
+  quả/đáp số cuối cùng, ⚠️ trước lỗi sai học sinh hay mắc phải. Dùng vừa phải (khoảng 2-5 icon mỗi câu
+  trả lời), đặt ở đầu dòng/đầu ý, KHÔNG lạm dụng chèn icon vào giữa câu hay thay thế cho chữ.
 - Luôn trả lời bằng tiếng Việt, giọng văn gần gũi như một anh/chị gia sư.
 """
 
@@ -148,6 +217,10 @@ gạch đầu dòng ngắn gọn, nhắc lại những điểm học sinh còn y
 - IN ĐẬM (dạng **như thế này**) những thông tin QUAN TRỌNG NHẤT: tên khái niệm/định luật, công thức
   cốt lõi, đơn vị, kết quả cuối cùng. Chỉ in đậm vài cụm then chốt (khoảng 2-5 chỗ mỗi câu trả lời),
   không in đậm cả câu hay cả đoạn.
+- DÙNG ICON/EMOJI phù hợp để lượt nói sinh động, trực quan hơn: ví dụ 🤔 khi đặt câu hỏi gợi mở,
+  💡 khi giảng ý chính, 🎯 khi chuyển sang ví dụ/ứng dụng thực tế, ✅ khi xác nhận học sinh trả lời
+  đúng, 📖 khi chuyển sang phần kiến thức mới. Dùng vừa phải (khoảng 1-3 icon mỗi lượt, nhớ lượt
+  nói đã giới hạn tối đa 100 từ), KHÔNG lạm dụng.
 """
 
 
@@ -165,6 +238,9 @@ Quy trình bắt buộc:
 
 Trả lời bằng tiếng Việt, trình bày rõ ràng, có thể dùng gạch đầu dòng hoặc đánh số bước.
 In đậm các thông tin quan trọng: công thức áp dụng, kết quả từng bước chính và đáp số cuối cùng.
+DÙNG ICON/EMOJI để bài giải trực quan, dễ theo dõi hơn: ví dụ 📷/📝 khi tóm tắt đề bài, 🔎 khi xác
+định dạng bài/công thức cần dùng, 🧮 trước mỗi bước tính toán, ⚠️ khi lưu ý phần ảnh mờ/không chắc
+chắn, và ✅ trước đáp số cuối cùng. Dùng vừa phải, đặt ở đầu mỗi bước/mục, không lạm dụng.
 """
 
 
@@ -186,6 +262,30 @@ dạng CHÍNH XÁC như sau, đủ 5 phần tử trong mảng:
 
 === NỘI DUNG BUỔI HỌC ===
 {history}
+"""
+
+
+# --- Prompt soạn bài tập trắc nghiệm GIÁO VIÊN giao cho cả lớp, dựa trên 1 tài
+# liệu/chủ đề cụ thể (khác QUIZ_PROMPT_TEMPLATE ở chỗ: không có "buổi học" nào
+# diễn ra trước đó, mà soạn thẳng từ nội dung tài liệu giáo viên chọn). ---
+ASSIGNMENT_QUIZ_PROMPT_TEMPLATE = """Dựa trên nội dung tài liệu về chủ đề "{topic}" (xem bên dưới), hãy soạn ĐÚNG
+{num_questions} câu hỏi trắc nghiệm Vật lý 12 để giao cho học sinh làm bài tập về nhà. Mỗi câu có 4 đáp án A/B/C/D,
+chỉ 1 đáp án đúng. Bám sát đúng nội dung tài liệu, độ khó tăng dần từ câu đầu đến câu cuối, KHÔNG được trùng ý
+giữa các câu.
+
+CHỈ trả lời bằng JSON hợp lệ, không thêm chữ nào khác, không dùng markdown code fence (không có ```). Định
+dạng CHÍNH XÁC như sau, đủ {num_questions} phần tử trong mảng:
+[
+  {{
+    "question": "nội dung câu hỏi",
+    "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}},
+    "correct": "A",
+    "explanation": "giải thích ngắn gọn (1-2 câu) vì sao đáp án đó đúng"
+  }}
+]
+
+=== NỘI DUNG TÀI LIỆU ===
+{content}
 """
 
 

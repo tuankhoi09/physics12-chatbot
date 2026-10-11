@@ -1,13 +1,21 @@
+# Môi trường ảo Python
 venv/
 __pycache__/
 *.pyc
+
+# API key / cấu hình riêng - KHÔNG đưa lên GitHub
 .env
 .streamlit/secrets.toml
 
-# Lịch sử trò chuyện cá nhân - không đưa lên GitHub
-vectorstore/chat_history.json
-vectorstore/tutor_history.json
-vectorstore/tutor_state.json
-vectorstore/qna_sessions.json
-vectorstore/solve_sessions.json
-vectorstore/qna_active_id.json
+# Tài khoản đăng nhập (chứa mật khẩu đã băm) - KHÔNG đưa lên GitHub
+auth_config.yaml
+
+# Dữ liệu riêng của từng tài khoản: tài liệu đã tải lên, chỉ mục RAG, lịch sử chat
+user_data/
+
+# Dữ liệu chung: lớp học, bài tập đã giao, bài nộp của học sinh
+school_data/
+
+# Dữ liệu cũ (trước khi có đăng nhập đa tài khoản), nếu còn sót lại
+data/
+vectorstore/
