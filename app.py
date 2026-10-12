@@ -206,7 +206,7 @@ with st.sidebar:
 
     if st.session_state.get("messages"):
         chat_text = "\n\n".join(
-            f"{'Bạn' if m['role'] == 'user' else 'Mình (Chatbot nhóm 2)'}: {m['content']}"
+            f"{'Bạn' if m['role'] == 'user' else 'Mình (Chatbot nhóm 1)'}: {m['content']}"
             for m in st.session_state.messages
         )
         st.download_button(
